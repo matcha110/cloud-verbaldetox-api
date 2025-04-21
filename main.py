@@ -1,6 +1,6 @@
-
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.responses import JSONResponse
+
 # from google.cloud import speech
 import vertexai
 from vertexai.generative_models import GenerativeModel
@@ -25,6 +25,7 @@ vertexai.init(project="zenn-hackthon-2", location="us-central1")
 #     text = speech_to_text(path)
 #     print("Transcript:", text)
 
+
 #     # 感情分析
 #     level, color = analyze_sentiment(text)
 #     return JSONResponse(content={"level": level, "color": color})
@@ -38,10 +39,7 @@ async def analyze_text(
         level, color = analyze_sentiment(text)
         return JSONResponse(content={"level": level, "color": color})
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # def speech_to_text(file_path: str) -> str:
@@ -60,6 +58,7 @@ async def analyze_text(
 #         return ""
 #     return response.results[0].alternatives[0].transcript
 
+
 @app.get("/")
 def health():
     return {"status": "ok"}
@@ -68,9 +67,9 @@ def health():
 def analyze_sentiment(text: str):
     # プロジェクトとリージョンはご自身の値に
     import vertexai
+
     vertexai.init(project="zenn-hackthon-2", location="us-central1")
 
-    # Gemini 1.5 Flash を使う例
     model = GenerativeModel("gemini-1.5-flash-002")
 
     prompt = f"""あなたは日本語の文章を読み取り、感情を分析してください。
@@ -85,15 +84,20 @@ color: #RRGGBB （感情に応じた色）
 出力:
 """
 
-    # ここで文字列をそのまま渡す
     response = model.generate_content(prompt)
     raw = response.text.strip()
 
     # パース
     try:
         lines = [l.strip() for l in raw.splitlines() if l.strip()]
-        level = int(next(l for l in lines if l.lower().startswith("level")).split(":",1)[1])
-        color = next(l for l in lines if l.lower().startswith("color")).split(":",1)[1].strip()
+        level = int(
+            next(l for l in lines if l.lower().startswith("level")).split(":", 1)[1]
+        )
+        color = (
+            next(l for l in lines if l.lower().startswith("color"))
+            .split(":", 1)[1]
+            .strip()
+        )
     except Exception:
         level, color = 2, "#88E0A6"
 
