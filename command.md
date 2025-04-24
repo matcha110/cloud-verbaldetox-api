@@ -27,4 +27,12 @@ curl -X POST \
   -F "text=今日はとても嬉しい気持ちです" \
   https://verbaldetox-api-160302376986.us-central1.run.app/diary
 
+
+curl -X POST \
+  -F "uid=test" \
+  -F "date=$(date +%Y%m%d)" \
+  -F "text=今日は仕事の締め切りが終わり開放的な気持ちです" \
+  https://verbaldetox-api-160302376986.us-central1.run.app/diary
+
+
 ```

@@ -2,6 +2,7 @@ from fastapi import FastAPI, Form
 from fastapi.responses import JSONResponse
 import vertexai
 from vertexai.generative_models import GenerativeModel
+import re
 
 app = FastAPI()
 
@@ -31,7 +32,8 @@ def health():
 def analyze_sentiment(text: str) -> str:
     model = GenerativeModel("gemini-1.5-flash-002")
 
-    prompt = f"""以下の日本語テキストを読み取り、テキストの内容に最もふさわしい単一のカラーコードを #RRGGBB 形式で出力してください。
+    prompt = f"""以下の日本語テキストを読み取り、テキストの内容に最もふさわしい単一のカラーコードを #RRGGBB 形式で**厳密に**出力してください。
+余計な説明や注釈、改行等は一切含めないでください。
 
 入力:
 {text}
@@ -40,8 +42,11 @@ def analyze_sentiment(text: str) -> str:
 """
     response = model.generate_content(prompt)
 
-    # 失敗したときのデフォルト
-    try:
-        return response.text.strip()
-    except Exception:
-        return "#88E0A6"
+    raw = response.text.strip()
+    # #RRGGBB の形式でマッチ
+    m = re.search(r'#([0-9A-Fa-f]{{6}})', raw)
+    if m:
+        # 大文字に統一して返す
+        return f'#{m.group(1).upper()}'
+    # マッチしなかった場合のフォールバック
+    return "#88E0A6"
