@@ -1,0 +1,10 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"      # ホスト8080 → コンテナ8080
+    environment:
+      - PORT=8080        # ENTRYPOINT の ${PORT} に渡す
+    restart: unless-stopped
