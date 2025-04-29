@@ -27,18 +27,19 @@ async def analyze_text(
 
 
 def analyze_emotion_and_color(text: str) -> tuple[int, int, str]:
-    """Gemini に 1 回のプロンプトで Russell の円環モデルに従った座標とカラーコードを出力させてパースする。"""
+    """Gemini に 1 回のプロンプトで座標とカラーコードを出力させてパースする。"""
     model = GenerativeModel("gemini-1.5-flash-002")
     prompt = (
-        "以下の日本語テキストを読み取り、Russellの円環構造モデルに従い、"
-        "水平軸 (快=+10, 不快=-10)、"
-        "垂直軸 (覚醒=+10, 鎮静=-10) の2軸で心情を評価し、"
-        "以下の形式で**厳密に**1行で出力してください。\n"
-        "x=<整数>,y=<整数>,color=#RRGGBB\n"
+        "以下の日本語テキストを読み取り、作者の心情を次のフォーマットで **厳密に 1 行** 出力してください。\n"
+        "x=<整数>,y=<整数>,color=#RRGGBB\n\n"
+        "評価基準:\n"
+        "・x軸: 落ち着き = -10, 元気 = +10\n"
+        "・y軸: 暗い = -10, 明るい = +10\n\n"
         "余計な説明や注釈、改行は一切含めないでください。\n\n"
         f"入力:\n{text}\n\n出力:\n"
     )
     raw = model.generate_content(prompt).text.strip()
+    # 例: "x=3,y=-7,color=#AABBCC"
     m = re.match(r"x\s*=\s*(-?\d+)\s*,\s*y\s*=\s*(-?\d+)\s*,\s*color\s*=\s*#([0-9A-Fa-f]{6})", raw)
     if not m:
         raise ValueError(f"Unexpected model output: {raw!r}")
