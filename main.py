@@ -1,13 +1,17 @@
-from fastapi import FastAPI, Form, BackgroundTasks, HTTPException
-import vertexai, re, logging
+from fastapi import FastAPI, Form, BackgroundTasks, HTTPException, UploadFile, File
+import vertexai, re, logging, os
 from vertexai.generative_models import GenerativeModel
-from google.cloud import firestore
+from google.cloud import firestore, storage, speech_v2 as speech
+from uuid import uuid4
 import google.auth
 
-app = FastAPI()
-vertexai.init(project="zenn-hackthon-2", location="us-central1")
 
+app = FastAPI()
+BUCKET = os.getenv("AUDIO_BUCKET", "verbaldetox-audio")
+vertexai.init(project="zenn-hackthon-2", location="us-central1")
 db = firestore.Client()
+storage_client = storage.Client()
+speech_client = speech.SpeechClient()
 
 
 # Firestore からユーザのカラーパレットを取得
@@ -29,6 +33,54 @@ def get_user_palette(uid: str) -> dict[str, str]:
         "dark": data.get("dark_color", "#666699"),
         "calm": data.get("calm_color", "#A8E6CF"),
     }
+
+
+@app.post("/diary/audio")
+async def analyze_audio(
+    background_tasks: BackgroundTasks,
+    uid: str = Form(...),
+    date: str = Form(...),
+    audio: UploadFile = File(...),
+):
+    try:
+        # 1) GCS にアップロード
+        blob_name = f"audio/{uid}/{date}/{uuid4()}{os.path.splitext(audio.filename)[1]}"
+        bucket = storage_client.bucket(BUCKET)
+        blob = bucket.blob(blob_name)
+        blob.upload_from_file(audio.file, content_type=audio.content_type)
+        gcs_uri = f"gs://{BUCKET}/{blob_name}"
+
+        # 2) 音声認識
+        config = {
+            "language_code": "ja-JP",
+            "auto_decoding_config": {},
+            "model": "latest_long",
+        }
+        op = speech_client.long_running_recognize(
+            recognizer=f"projects/{PROJECT}/locations/us-central1/recognizers/_",
+            config=config,
+            uri=gcs_uri,
+        )
+        response = op.result(timeout=30)
+        transcript = " ".join(
+            r.text for res in response.results for r in res.alternatives
+        )
+
+        # 3) 既存ロジックへ
+        palette = get_user_palette(uid)
+        x, y, color = analyze_emotion_and_color(transcript, palette)
+
+        background_tasks.add_task(save_to_firestore, uid, date, transcript, x, y, color)
+        return {
+            "x": x,
+            "y": y,
+            "color": color,
+            "transcript": transcript,
+        }
+
+    except Exception as e:
+        logging.exception(e)
+        raise HTTPException(500, str(e))
 
 
 @app.post("/diary")
@@ -94,7 +146,9 @@ CALM       = {palette['calm']}     # 快 + 沈静
 
 
     raw = model.generate_content(prompt).text.strip()
-    pattern = r"^x\s*=\s*(-?\d+)\s*,\s*y\s*=\s*(-?\d+)\s*,\s*color\s*=\s*#([0-9A-Fa-f]{6})$"
+    pattern = (
+        r"^x\s*=\s*(-?\d+)\s*,\s*y\s*=\s*(-?\d+)\s*,\s*color\s*=\s*#([0-9A-Fa-f]{6})$"
+    )
     m = re.match(pattern, raw)
     if not m:
         raise ValueError(f"Unexpected model output: {raw!r}")
