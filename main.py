@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Form, BackgroundTasks, HTTPException, UploadFile, File
-import vertexai, re, logging, os
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks, HTTPException
+import vertexai, re, logging
 from vertexai.generative_models import GenerativeModel
-from google.cloud import firestore, storage, speech_v2 as speech
-from uuid import uuid4
+from google.cloud import firestore
+from google.cloud.speech import SpeechClient
 import google.auth
+from fastapi import Form
 
 
 app = FastAPI()
@@ -11,7 +12,7 @@ BUCKET = os.getenv("AUDIO_BUCKET", "verbaldetox-audio")
 vertexai.init(project="zenn-hackthon-2", location="us-central1")
 db = firestore.Client()
 storage_client = storage.Client()
-speech_client = speech.SpeechClient()
+speech_client = SpeechClient()
 
 
 # Firestore からユーザのカラーパレットを取得
@@ -83,21 +84,21 @@ async def analyze_audio(
         raise HTTPException(500, str(e))
 
 
-@app.post("/diary")
-async def analyze_text(
-    background_tasks: BackgroundTasks,
-    uid: str = Form(...),
-    date: str = Form(...),
-    text: str = Form(...),
-):
-    """日記テキストを 1 回の Gemini 呼び出しで解析し、(x, y, color) を返す。"""
-    try:
-        palette = get_user_palette(uid)
-        x, y, color = analyze_emotion_and_color(text, palette)
-        background_tasks.add_task(save_to_firestore, uid, date, text, x, y, color)
-        return {"x": x, "y": y, "color": color}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def transcribe_audio(content: bytes, mime_type: str) -> str:
+    """
+    音声バイト列を文字起こしして返す。
+    mime_type 例: "audio/wav", "audio/flac", "audio/mp3"
+    """
+    audio = speech.RecognitionAudio(content=content)
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        sample_rate_hertz=16000,
+        language_code="ja-JP",
+        audio_channel_count=1,
+    )
+    resp = speech_client.recognize(config=config, audio=audio)
+    # 複数結果を連結
+    return "".join([result.alternatives[0].transcript for result in resp.results])
 
 
 def analyze_emotion_and_color(
@@ -113,30 +114,27 @@ def analyze_emotion_and_color(
 
     prompt = f"""
 あなたは感情心理学と配色設計の専門家です。
-次の日本語テキストを読み取り、感情を 2 軸 (x, y) で評価し、
+次の日本語テキストを読み取り、感情を 2 軸 (x, y) で評価し、
 **必ず 1 行のみ** 下記フォーマットで出力してください。
 
 フォーマット:
 x={{整数}},y={{整数}},color=#RRGGBB
 
-座標定義 (整数 −10〜+10):
+座標定義 (整数 −10〜+10):
 ・x 軸  -10 = 強い不快感   +10 = 強い快感
 ・y 軸  -10 = 沈静（リラックス） +10 = 覚醒（高い活力）
 
 利用可能パレット:
-BRIGHT     = {palette['bright']}   # 快 + 覚醒
-ENERGETIC  = {palette['energetic']} # 快 + 高覚醒
+BRIGHT     = {palette['bright']}   # 快 + 高覚醒
+ENERGETIC  = {palette['energetic']} # 不快 + 高覚醒
 DARK       = {palette['dark']}     # 不快 + 沈静
 CALM       = {palette['calm']}     # 快 + 沈静
 
 **色選定ルール**  
 1. color には上記 4 色のうち **最多でも 2 色** を線形ブレンドして RGB 6 桁で出力する。  
    - ブレンド比率は |x| : |y| に比例して決めること。  
-     例) x=8, y=2 → 快方向 80%, 覚醒方向 20%  
-2. |x| または |y| が **7 以上** の場合は、その軸に対応する 1 色だけを使用する。  
-3. ブレンド候補 2 色の色差 (ΔE) が **20 未満** なら、より色差が大きい別の組み合わせを優先する。  
-   （似た色同士を混ぜてくすまないようにするため）  
-4. 余計な説明・改行・コードブロックは一切含めない。
+     例) x=8, y=2 → 快方向 80%, 覚醒方向 20%   
+2. 余計な説明・改行・コードブロックは一切含めない。
 
 入力:
 {text}
@@ -155,21 +153,20 @@ CALM       = {palette['calm']}     # 快 + 沈静
 
     x, y = int(m.group(1)), int(m.group(2))
     color = f"#{m.group(3).upper()}"
-    x, y = max(-10, min(10, x)), max(-10, min(10, y))
+    x = max(-10, min(10, x))
+    y = max(-10, min(10, y))
     return x, y, color
 
 
 def save_to_firestore(uid: str, date: str, text: str, x: int, y: int, color: str):
     """Firestore に解析結果を保存 (バックグラウンド用)。"""
-    import os, google.auth, logging
-
     try:
         doc_id = f"{uid}_{date}"
         db.collection("diary").document(doc_id).set(
             {
                 "uid": uid,
                 "date": date,
-                "text": text,
+                "transcript": text,
                 "x": x,
                 "y": y,
                 "color": color,
@@ -178,3 +175,42 @@ def save_to_firestore(uid: str, date: str, text: str, x: int, y: int, color: str
         logging.info("Firestore write success")
     except Exception as e:
         logging.exception(repr(e))
+
+
+@app.post("/diary/audio")
+async def analyze_audio(
+    background_tasks: BackgroundTasks,
+    uid: str = Form(...),
+    date: str = Form(...),
+    audio_file: UploadFile = File(...),
+):
+    """
+    音声ファイルを受け取って文字起こし → 感情解析・配色 → Firestore 保存
+    レスポンス: {"x": ..., "y": ..., "color": "#RRGGBB"}
+    """
+    try:
+        content = await audio_file.read()
+        transcript = transcribe_audio(content, audio_file.content_type)
+        palette = get_user_palette(uid)
+        x, y, color = analyze_emotion_and_color(transcript, palette)
+        background_tasks.add_task(save_to_firestore, uid, date, transcript, x, y, color)
+        return {"x": x, "y": y, "color": color}
+    except Exception as e:
+        logging.exception("analysis error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/diary/text")
+async def analyze_text(
+    background_tasks: BackgroundTasks,
+    uid: str = Form(...),
+    date: str = Form(...),
+    text: str = Form(...),
+):
+    try:
+        palette = get_user_palette(uid)
+        x, y, color = analyze_emotion_and_color(text, palette)
+        background_tasks.add_task(save_to_firestore, uid, date, text, x, y, color)
+        return {"x": x, "y": y, "color": color}
+    except Exception as e:
+        logging.exception("text analysis error")
+        raise HTTPException(status_code=500, detail=str(e))
