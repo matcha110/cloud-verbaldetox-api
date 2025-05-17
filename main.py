@@ -1,23 +1,26 @@
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks, HTTPException
-import vertexai, re, logging
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks, HTTPException, Form
+import vertexai, re, logging, os, uuid
 from vertexai.generative_models import GenerativeModel
 from google.cloud import firestore
-from google.cloud.speech import SpeechClient
-import google.auth
-from fastapi import Form
+from google.cloud import storage
+from google.cloud import speech
+import asyncio
 
 
 app = FastAPI()
-BUCKET = os.getenv("AUDIO_BUCKET", "verbaldetox-audio")
-vertexai.init(project="zenn-hackthon-2", location="us-central1")
+BUCKET = os.getenv("AUDIO_BUCKET", "zenn-hackthon")
+PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "zenn-hackthon-2")
+vertexai.init(project=PROJECT, location="us-central1")
+storage_client = storage.Client(project=PROJECT)
+speech_client = speech.SpeechClient()
 db = firestore.Client()
-storage_client = storage.Client()
-speech_client = SpeechClient()
 
 
 # Firestore からユーザのカラーパレットを取得
 def get_user_palette(uid: str) -> dict[str, str]:
-    """users/{uid} ドキュメントから 4 色を取り出す。無ければデフォルト。"""
+    """
+    users/{uid} ドキュメントから 4 色を取り出す。無ければデフォルト。
+    """
     doc = db.collection("users").document(uid).get()
     if not doc.exists:
         # デフォルト 4 色（例）
@@ -44,34 +47,41 @@ async def analyze_audio(
     audio: UploadFile = File(...),
 ):
     try:
-        # 1) GCS にアップロード
-        blob_name = f"audio/{uid}/{date}/{uuid4()}{os.path.splitext(audio.filename)[1]}"
+        # --- (1) GCS にアップロード ---
+        ext = os.path.splitext(audio.filename)[1]
+        blob_name = f"audio/{uid}/{date}/{uuid.uuid4()}{ext}"
         bucket = storage_client.bucket(BUCKET)
         blob = bucket.blob(blob_name)
         blob.upload_from_file(audio.file, content_type=audio.content_type)
         gcs_uri = f"gs://{BUCKET}/{blob_name}"
 
-        # 2) 音声認識
-        config = {
-            "language_code": "ja-JP",
-            "auto_decoding_config": {},
-            "model": "latest_long",
-        }
-        op = speech_client.long_running_recognize(
-            recognizer=f"projects/{PROJECT}/locations/us-central1/recognizers/_",
-            config=config,
-            uri=gcs_uri,
-        )
-        response = op.result(timeout=30)
-        transcript = " ".join(
-            r.text for res in response.results for r in res.alternatives
+        # --- (2) 短時間音声の同期文字起こし ---
+        recognition_audio = speech.RecognitionAudio(uri=gcs_uri)
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.FLAC,
+            sample_rate_hertz=16000,
+            language_code="ja-JP",
+            enable_automatic_punctuation=True,
         )
 
-        # 3) 既存ロジックへ
+        # ブロッキング処理をイベントループ外にオフロード
+        response = await asyncio.to_thread(
+            speech_client.recognize,
+            config,
+            recognition_audio,
+        )
+
+        transcript = "".join(
+            result.alternatives[0].transcript for result in response.results
+        )
+
+        # --- (3) 感情解析＆Firestore 保存 ---
         palette = get_user_palette(uid)
         x, y, color = analyze_emotion_and_color(transcript, palette)
+        background_tasks.add_task(
+            save_to_firestore, uid, date, transcript, x, y, color
+        )
 
-        background_tasks.add_task(save_to_firestore, uid, date, transcript, x, y, color)
         return {
             "x": x,
             "y": y,
@@ -81,8 +91,8 @@ async def analyze_audio(
 
     except Exception as e:
         logging.exception(e)
-        raise HTTPException(500, str(e))
-
+        # 内部エラー詳細はログに残しつつ、レスポンスは汎用メッセージに
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 def transcribe_audio(content: bytes, mime_type: str) -> str:
     """
@@ -177,27 +187,6 @@ def save_to_firestore(uid: str, date: str, text: str, x: int, y: int, color: str
         logging.exception(repr(e))
 
 
-@app.post("/diary/audio")
-async def analyze_audio(
-    background_tasks: BackgroundTasks,
-    uid: str = Form(...),
-    date: str = Form(...),
-    audio_file: UploadFile = File(...),
-):
-    """
-    音声ファイルを受け取って文字起こし → 感情解析・配色 → Firestore 保存
-    レスポンス: {"x": ..., "y": ..., "color": "#RRGGBB"}
-    """
-    try:
-        content = await audio_file.read()
-        transcript = transcribe_audio(content, audio_file.content_type)
-        palette = get_user_palette(uid)
-        x, y, color = analyze_emotion_and_color(transcript, palette)
-        background_tasks.add_task(save_to_firestore, uid, date, transcript, x, y, color)
-        return {"x": x, "y": y, "color": color}
-    except Exception as e:
-        logging.exception("analysis error")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/diary/text")
 async def analyze_text(
