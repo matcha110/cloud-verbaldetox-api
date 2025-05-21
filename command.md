@@ -16,7 +16,25 @@ gcloud run deploy verbaldetox-api \
 ```
 curl https://verbaldetox-api-160302376986.us-central1.run.app/diary
 ```
+### test 音声ファイル渡す APItest
+```bash
+SERVICE_URL="https://verbaldetox-api-160302376986.us-central1.run.app/diary/audio"
+FLAC_PATH="./diary/audio/audio_20250522_020600.flac"
 
+curl -v -X POST "${SERVICE_URL}" \
+  -F "uid=testuser" \
+  -F "date=2025-05-22" \
+  -F "audio=@${FLAC_PATH};type=audio/flac"
+```
+
+### logging出力
+```bash
+gcloud run services logs read verbaldetox-api \
+  --project=zenn-hackthon-2 \
+  --region=us-central1 \
+  --limit=60
+
+```
 ### test テキスト -> カラー取得
 ```
 curl -X POST \
