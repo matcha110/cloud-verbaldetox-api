@@ -13,7 +13,7 @@ PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "zenn-hackthon-2")
 vertexai.init(project=PROJECT, location="us-central1")
 storage_client = storage.Client(project=PROJECT)
 speech_client = speech.SpeechClient()
-db = firestore.Client()
+db = firestore.Client(project=PROJECT)
 
 
 # Firestore からユーザのカラーパレットを取得
@@ -54,29 +54,34 @@ async def analyze_audio(
         blob = bucket.blob(blob_name)
         blob.upload_from_file(audio.file, content_type=audio.content_type)
         gcs_uri = f"gs://{BUCKET}/{blob_name}"
+        logging.info(f"Uploaded audio to GCS: {gcs_uri}")
 
         # --- (2) 短時間音声の同期文字起こし ---
         recognition_audio = speech.RecognitionAudio(uri=gcs_uri)
         config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.FLAC,
-            sample_rate_hertz=16000,
-            language_code="ja-JP",
+            encoding    = speech.RecognitionConfig.AudioEncoding.FLAC,
+            sample_rate_hertz = 44100,
+            language_code= "ja-JP",
             enable_automatic_punctuation=True,
+            audio_channel_count=2,
         )
-
-        # ブロッキング処理をイベントループ外にオフロード
+        logging.info("Calling speech_client.recognize() …")
         response = await asyncio.to_thread(
-            speech_client.recognize,
-            config,
-            recognition_audio,
+            lambda: speech_client.recognize(
+                config=config,
+                audio=recognition_audio,
+            )
         )
-
+        logging.info(f"Speech-to-Text response: {response}")  # 結果オブジェクト全体
+        logging.info(f"Number of results: {len(response.results)}")
         transcript = "".join(
             result.alternatives[0].transcript for result in response.results
         )
+        logging.info(f"Transcript: {transcript!r}")
 
         # --- (3) 感情解析＆Firestore 保存 ---
         palette = get_user_palette(uid)
+        print(palette)
         x, y, color = analyze_emotion_and_color(transcript, palette)
         background_tasks.add_task(
             save_to_firestore, uid, date, transcript, x, y, color
@@ -97,14 +102,13 @@ async def analyze_audio(
 def transcribe_audio(content: bytes, mime_type: str) -> str:
     """
     音声バイト列を文字起こしして返す。
-    mime_type 例: "audio/wav", "audio/flac", "audio/mp3"
     """
     audio = speech.RecognitionAudio(content=content)
     config = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
         sample_rate_hertz=16000,
         language_code="ja-JP",
-        audio_channel_count=1,
+        audio_channel_count=2,
     )
     resp = speech_client.recognize(config=config, audio=audio)
     # 複数結果を連結
@@ -153,7 +157,10 @@ CALM       = {palette['calm']}     # 快 + 沈静
 """.strip()
 
 
+    logging.info(f"Emotion analysis prompt:\n{prompt}")
+
     raw = model.generate_content(prompt).text.strip()
+    logging.info(f"[DEBUG] Vertex AI raw output: {raw!r}")
     pattern = (
         r"^x\s*=\s*(-?\d+)\s*,\s*y\s*=\s*(-?\d+)\s*,\s*color\s*=\s*#([0-9A-Fa-f]{6})$"
     )
