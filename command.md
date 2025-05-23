@@ -22,8 +22,8 @@ SERVICE_URL="https://verbaldetox-api-160302376986.us-central1.run.app/diary/audi
 FLAC_PATH="./diary/audio/audio_20250522_020600.flac"
 
 curl -v -X POST "${SERVICE_URL}" \
-  -F "uid=testuser" \
-  -F "date=2025-05-22" \
+  -F "uid=RqHYhyuPJRTQUCC944gsJPev6vB2" \
+  -F "date=2025-05-21" \
   -F "audio=@${FLAC_PATH};type=audio/flac"
 ```
 
