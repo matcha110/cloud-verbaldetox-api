@@ -179,9 +179,9 @@ def save_to_firestore(uid: str, date: str, text: str, x: int, y: int, color: str
     """Firestore に解析結果を保存 (バックグラウンド用)。"""
     try:
         doc_id = f"{uid}_{date}"
-        db.collection("diary").document(doc_id).set(
+        user_diary_ref = db.collection("users").document(uid).collection("diary")
+        user_diary_ref.document(doc_id).set(
             {
-                "uid": uid,
                 "date": date,
                 "transcript": text,
                 "x": x,
