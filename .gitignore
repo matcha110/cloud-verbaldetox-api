@@ -3,3 +3,4 @@ serviceAccountKey.json
 __pycache__/
 *.pyc
 insert_dummy_diary.py
+zenn-hackthon-2-3bc7d351023e.json
