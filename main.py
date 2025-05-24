@@ -5,21 +5,26 @@ from google.cloud import firestore
 from google.cloud import storage
 from google.cloud import speech
 import asyncio
-
+from typing import Dict, Tuple
 
 app = FastAPI()
-BUCKET = os.getenv("AUDIO_BUCKET", "zenn-hackthon")
-PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "zenn-hackthon-2")
+BUCKET: str = os.getenv("AUDIO_BUCKET", "zenn-hackthon")
+PROJECT: str = os.getenv("GOOGLE_CLOUD_PROJECT", "zenn-hackthon-2")
 vertexai.init(project=PROJECT, location="us-central1")
 storage_client = storage.Client(project=PROJECT)
 speech_client = speech.SpeechClient()
 db = firestore.Client(project=PROJECT)
 
 
-# Firestore からユーザのカラーパレットを取得
-def get_user_palette(uid: str) -> dict[str, str]:
+def get_user_palette(uid: str) -> Dict[str, str]:
     """
-    users/{uid} ドキュメントから 4 色を取り出す。無ければデフォルト。
+    Firestore から指定ユーザのカラーパレット（4色）を取得
+
+    Args:
+        uid (str): ユーザID
+
+    Returns:
+        dict[str, str]: パレット名（'bright'等）をキーとし、カラーコード('#RRGGBB')を値とする辞書
     """
     doc = db.collection("users").document(uid).get()
     if not doc.exists:
@@ -45,47 +50,52 @@ async def analyze_audio(
     uid: str = Form(...),
     date: str = Form(...),
     audio: UploadFile = File(...),
-):
+) -> dict:
+    """
+    音声ファイルを受け取り、GCSへ保存→Speech-to-Textで文字起こし→Geminiによる感情解析を実施し、
+    Firestoreへ結果をバックグラウンドで保存
+
+    Args:
+        background_tasks (BackgroundTasks): バックグラウンドタスク管理
+        uid (str): ユーザID
+        date (str): 日付(任意の形式、通常 'YYYY-MM-DD')
+        audio (UploadFile): アップロードされた音声ファイル
+
+    Returns:
+        dict: 解析結果 { "x": int, "y": int, "color": str, "transcript": str }
+    """
     try:
         # --- (1) GCS にアップロード ---
-        ext = os.path.splitext(audio.filename)[1]
-        blob_name = f"audio/{uid}/{date}/{uuid.uuid4()}{ext}"
+        ext: str = os.path.splitext(audio.filename)[1]
+        blob_name: str = f"audio/{uid}/{date}/{uuid.uuid4()}{ext}"
         bucket = storage_client.bucket(BUCKET)
         blob = bucket.blob(blob_name)
         blob.upload_from_file(audio.file, content_type=audio.content_type)
-        gcs_uri = f"gs://{BUCKET}/{blob_name}"
-        logging.info(f"Uploaded audio to GCS: {gcs_uri}")
+        gcs_uri: str = f"gs://{BUCKET}/{blob_name}"
 
         # --- (2) 短時間音声の同期文字起こし ---
         recognition_audio = speech.RecognitionAudio(uri=gcs_uri)
         config = speech.RecognitionConfig(
-            encoding    = speech.RecognitionConfig.AudioEncoding.FLAC,
-            sample_rate_hertz = 44100,
-            language_code= "ja-JP",
+            encoding=speech.RecognitionConfig.AudioEncoding.FLAC,
+            sample_rate_hertz=44100,
+            language_code="ja-JP",
             enable_automatic_punctuation=True,
             audio_channel_count=2,
         )
-        logging.info("Calling speech_client.recognize() …")
         response = await asyncio.to_thread(
             lambda: speech_client.recognize(
                 config=config,
                 audio=recognition_audio,
             )
         )
-        logging.info(f"Speech-to-Text response: {response}")  # 結果オブジェクト全体
-        logging.info(f"Number of results: {len(response.results)}")
-        transcript = "".join(
+        transcript: str = "".join(
             result.alternatives[0].transcript for result in response.results
         )
-        logging.info(f"Transcript: {transcript!r}")
 
         # --- (3) 感情解析＆Firestore 保存 ---
-        palette = get_user_palette(uid)
-        print(palette)
+        palette: Dict[str, str] = get_user_palette(uid)
         x, y, color = analyze_emotion_and_color(transcript, palette)
-        background_tasks.add_task(
-            save_to_firestore, uid, date, transcript, x, y, color
-        )
+        background_tasks.add_task(save_to_firestore, uid, date, transcript, x, y, color)
 
         return {
             "x": x,
@@ -96,12 +106,19 @@ async def analyze_audio(
 
     except Exception as e:
         logging.exception(e)
-        # 内部エラー詳細はログに残しつつ、レスポンスは汎用メッセージに
         raise HTTPException(status_code=500, detail="Internal server error")
+
 
 def transcribe_audio(content: bytes, mime_type: str) -> str:
     """
-    音声バイト列を文字起こしして返す。
+    音声バイト列をSpeech-to-Textで文字起こしして返します。
+
+    Args:
+        content (bytes): 音声ファイルのバイト列
+        mime_type (str): 音声ファイルのMIMEタイプ（例: "audio/wav"）
+
+    Returns:
+        str: 文字起こし結果（全文）
     """
     audio = speech.RecognitionAudio(content=content)
     config = speech.RecognitionConfig(
@@ -111,18 +128,25 @@ def transcribe_audio(content: bytes, mime_type: str) -> str:
         audio_channel_count=2,
     )
     resp = speech_client.recognize(config=config, audio=audio)
-    # 複数結果を連結
     return "".join([result.alternatives[0].transcript for result in resp.results])
 
 
 def analyze_emotion_and_color(
-    text: str, palette: dict[str, str]
-) -> tuple[int, int, str]:
+    text: str, palette: Dict[str, str]
+) -> Tuple[int, int, str]:
     """
-    Gemini に 1 回のプロンプトで
-    ・x, y 座標（x: 不快→快, y: 沈静→覚醒）
-    ・emotion_color : ブレンド済みカラー (#RRGGBB)
-    を返させてパースして整形
+    Gemini API を使い、日本語テキストから感情座標 (x, y) と
+    指定パレットによる色コード (#RRGGBB) を推論します。
+
+    Args:
+        text (str): 入力テキスト（日本語）
+        palette (dict[str, str]): 4色のカラーパレット
+
+    Returns:
+        tuple[int, int, str]: (x, y, color)  
+            x (int): -10～+10（不快→快）  
+            y (int): -10～+10（沈静→覚醒）  
+            color (str): 6桁のカラーコード "#RRGGBB"
     """
     model = GenerativeModel("gemini-1.5-flash-002")
 
@@ -157,10 +181,7 @@ CALM       = {palette['calm']}     # 快 + 沈静
 """.strip()
 
 
-    logging.info(f"Emotion analysis prompt:\n{prompt}")
-
-    raw = model.generate_content(prompt).text.strip()
-    logging.info(f"[DEBUG] Vertex AI raw output: {raw!r}")
+    raw: str = model.generate_content(prompt).text.strip()
     pattern = (
         r"^x\s*=\s*(-?\d+)\s*,\s*y\s*=\s*(-?\d+)\s*,\s*color\s*=\s*#([0-9A-Fa-f]{6})$"
     )
@@ -175,10 +196,22 @@ CALM       = {palette['calm']}     # 快 + 沈静
     return x, y, color
 
 
-def save_to_firestore(uid: str, date: str, text: str, x: int, y: int, color: str):
-    """Firestore に解析結果を保存 (バックグラウンド用)。"""
+def save_to_firestore(
+    uid: str, date: str, text: str, x: int, y: int, color: str
+) -> None:
+    """
+    感情解析結果をFirestoreに保存します（バックグラウンドタスク用）。
+
+    Args:
+        uid (str): ユーザID
+        date (str): 日付
+        text (str): 文字起こしテキスト or 入力テキスト
+        x (int): x軸値
+        y (int): y軸値
+        color (str): カラーコード("#RRGGBB")
+    """
     try:
-        doc_id = f"{uid}_{date}"
+        doc_id: str = f"{uid}_{date}"
         user_diary_ref = db.collection("users").document(uid).collection("diary")
         user_diary_ref.document(doc_id).set(
             {
@@ -194,16 +227,28 @@ def save_to_firestore(uid: str, date: str, text: str, x: int, y: int, color: str
         logging.exception(repr(e))
 
 
-
 @app.post("/diary/text")
 async def analyze_text(
     background_tasks: BackgroundTasks,
     uid: str = Form(...),
     date: str = Form(...),
     text: str = Form(...),
-):
+) -> dict:
+    """
+    テキストを受け取り、Geminiによる感情分析を実施し、
+    Firestoreへ結果をバックグラウンドで保存します。
+
+    Args:
+        background_tasks (BackgroundTasks): バックグラウンドタスク管理
+        uid (str): ユーザID
+        date (str): 日付
+        text (str): 入力テキスト
+
+    Returns:
+        dict: 解析結果 { "x": int, "y": int, "color": str }
+    """
     try:
-        palette = get_user_palette(uid)
+        palette: Dict[str, str] = get_user_palette(uid)
         x, y, color = analyze_emotion_and_color(text, palette)
         background_tasks.add_task(save_to_firestore, uid, date, text, x, y, color)
         return {"x": x, "y": y, "color": color}
