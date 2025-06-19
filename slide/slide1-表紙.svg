@@ -1,0 +1,50 @@
+<svg viewBox="0 0 1024 768" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f8f9fa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#e9ecef;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="1024" height="768" fill="url(#bgGradient)"/>
+  
+  <!-- Header decoration -->
+  <rect x="0" y="0" width="1024" height="8" fill="#1565c0"/>
+  
+  <!-- Title -->
+  <text x="512" y="150" text-anchor="middle" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="#1565c0">
+    感情分析日記アプリ
+  </text>
+  
+  <text x="512" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" fill="#37474f">
+    AI-Powered Emotion Diary
+  </text>
+  
+  <!-- Google Cloud Logo placeholder -->
+  <circle cx="512" cy="320" r="60" fill="#4285f4" opacity="0.1"/>
+  <text x="512" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#4285f4">
+    Google Cloud
+  </text>
+  
+  <!-- Key features -->
+  <g transform="translate(200, 450)">
+    <circle cx="0" cy="0" r="8" fill="#42a5f5"/>
+    <text x="20" y="8" font-family="Arial, sans-serif" font-size="24" fill="#37474f">音声から感情を可視化</text>
+  </g>
+  
+  <g transform="translate(200, 500)">
+    <circle cx="0" cy="0" r="8" fill="#42a5f5"/>
+    <text x="20" y="8" font-family="Arial, sans-serif" font-size="24" fill="#37474f">Vertex AI による高精度分析</text>
+  </g>
+  
+  <g transform="translate(200, 550)">
+    <circle cx="0" cy="0" r="8" fill="#42a5f5"/>
+    <text x="20" y="8" font-family="Arial, sans-serif" font-size="24" fill="#37474f">セキュアなクラウドアーキテクチャ</text>
+  </g>
+  
+  <!-- Footer -->
+  <text x="512" y="720" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" fill="#78909c">
+    Google Cloud ハッカソン 2025
+  </text>
+</svg>
