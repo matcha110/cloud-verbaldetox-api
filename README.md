@@ -1,4 +1,4 @@
-# VerbalDetox: 音声入力 × AI感情分析日記アプリ
+# 気分屋の芝日記: "音声入力 × AI感情分析 で続ける簡単日記アプリ
 
 「忙しくて日記が続かない」「自分の感情を客観的に見たい」そんな悩みを解決する、音声で記録し、AIが感情を色で表現する日記アプリです。
 
@@ -44,7 +44,7 @@ VerbalDetoxは、ユーザーが音声で日記を記録すると、AIがその�
 
 1. リポジトリをクローンします:
    ```bash
-   git clone https://github.com/your-username/cloud-verbaldetox.git
+   git clone https://github.com/matcha110/verbaldetox.git
    cd cloud-verbaldetox
    ```
 
@@ -73,18 +73,10 @@ VerbalDetoxは、ユーザーが音声で日記を記録すると、AIがその�
 ## APIエンドポイント
 
 - `POST /diary/audio`: 音声ファイルをアップロードし、感情分析を実行します。
-- `POST /diary/text`: テキストを送信し、感情分析を実行します。
 
 ## 今後の展望
 
 - UI/UXの改善
 - コスト最適化
 - 感情分析モデルの精度向上
-
-## 貢献
-
-貢献を歓迎します！Issueを作成するか、Pull Requestを送信してください。
-
-## ライセンス
-
-このプロジェクトはMITライセンスの下で公開されています。
+- 音声読みとり、文字起こしの精度向上
